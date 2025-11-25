@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="pt-br" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Postgres Live Stream</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;600;700&display=swap');
+
+        :root {
+            --glass-bg: rgba(17, 24, 39, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --accent-glow: 0 0 20px rgba(59, 130, 246, 0.5);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #030712; /* Very dark background */
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+        /* Animations */
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        @keyframes pulse-ring {
+            0% { transform: scale(0.33); }
+            80%, 100% { opacity: 0; }
+        }
+
+        @keyframes pulse-dot {
+            0% { transform: scale(0.8); }
+            50% { transform: scale(1); }
+            100% { transform: scale(0.8); }
+        }
+
+        .message-enter { animation: slideIn 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+
+        .live-indicator { position: relative; }
+        .live-indicator::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            background-color: currentColor;
+            border-radius: 50%;
+            opacity: 0.6;
+            animation: pulse-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        .live-indicator::after {
+            content: '';
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            background-color: currentColor;
+            border-radius: 50%;
+            animation: pulse-dot 1.25s cubic-bezier(0.455, 0.03, 0.515, 0.955) -0.4s infinite;
+        }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col md:flex-row text-gray-100 overflow-hidden selection:bg-blue-500/30">
+
+    <!-- Sidebar de Configuração/Status -->
+    <aside class="w-full md:w-72 glass-panel border-r-0 md:border-r border-b md:border-b-0 flex flex-col z-20">
+        <!-- Logo Area -->
+        <div class="h-16 flex items-center px-6 border-b border-gray-800">
+            <div class="flex items-center gap-3">
+                <div class="relative w-8 h-8 flex items-center justify-center bg-blue-600/20 rounded-lg border border-blue-500/30 text-blue-400">
+                    <i data-lucide="activity" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-sm tracking-wide">PG STREAM</h1>
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider font-mono">Realtime Monitor</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search & Info Area -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-6">
+            
+            <!-- Channel Search -->
+            <div>
+                <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">Conectar ao Canal</h3>
+                <div class="px-2">
+                    <form onsubmit="app.handleSearch(event)" class="relative group">
+                        <input type="number" id="channel-search-input" 
+                            class="w-full bg-gray-900/50 border border-gray-700 text-gray-200 text-sm rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 block p-2.5 pl-9 transition-all" 
+                            placeholder="Digite o ID (ex: 1)..." required min="1">
+                        
+                        <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                             <i data-lucide="search" class="w-4 h-4 text-gray-500 group-focus-within:text-blue-400"></i>
+                        </div>
+                        
+                        <button type="submit" class="absolute inset-y-0 right-0 flex items-center pr-2">
+                            <div class="p-1 hover:bg-blue-500/20 rounded text-blue-500 transition-colors">
+                                <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                            </div>
+                        </button>
+                    </form>
+                    <p id="search-error" class="text-[10px] text-red-400 mt-2 hidden flex items-center gap-1">
+                        <i data-lucide="x-circle" class="w-3 h-3"></i> Este canal não existe.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Active Channel Card -->
+            <div id="active-channel-card" class="hidden px-2 animate-pulse">
+                 <div class="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-xl p-4 relative overflow-hidden">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <span class="text-[10px] text-blue-300 uppercase tracking-wide font-bold">Conectado</span>
+                            <h2 class="text-xl font-bold text-white mt-1 flex items-center gap-2">
+                                <span class="text-blue-500">#</span>
+                                <span id="card-channel-id">--</span>
+                            </h2>
+                        </div>
+                        <div class="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_10px_rgba(74,222,128,0.5)]"></div>
+                    </div>
+                    <p class="text-[10px] text-gray-400 font-mono">Status: LISTEN channel_<span id="card-channel-id-sm">0</span></p>
+                 </div>
+            </div>
+
+            <!-- Stats Widget -->
+            <div class="bg-gray-800/30 rounded-xl p-4 border border-gray-700/50 mx-2">
+                <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Estatísticas</h3>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-gray-900/50 p-2 rounded-lg border border-gray-800">
+                        <div class="text-[10px] text-gray-500">Mensagens</div>
+                        <div class="text-lg font-mono font-bold text-white" id="stat-count">0</div>
+                    </div>
+                    <div class="bg-gray-900/50 p-2 rounded-lg border border-gray-800">
+                        <div class="text-[10px] text-gray-500">Latência</div>
+                        <div class="text-lg font-mono font-bold text-emerald-400" id="latency-stat">~Ms</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Footer -->
+        <div class="p-4 border-t border-gray-800 bg-black/20">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div id="status-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"></div>
+                    <span id="status-text" class="text-xs font-medium text-gray-400">Desconectado</span>
+                </div>
+                <button onclick="app.toggleScroll()" id="scroll-btn" class="p-1.5 hover:bg-gray-700 rounded text-gray-500 hover:text-white transition-colors" title="Toggle Auto-scroll">
+                    <i data-lucide="arrow-down-circle" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 flex flex-col min-w-0 relative bg-gray-900/50">
+        
+        <!-- Stream Header -->
+        <header class="h-16 flex items-center justify-between px-6 border-b border-gray-800 glass-panel z-10">
+            <div>
+                <h2 id="header-title" class="text-lg font-semibold text-white flex items-center gap-2">
+                    <span class="text-gray-500">#</span> Aguardando Seleção
+                </h2>
+                <p class="text-xs text-gray-500 font-mono mt-0.5">Stream de Eventos SSE • Mime-Type: text/event-stream</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span id="listening-badge" class="px-2 py-1 bg-gray-500/10 border border-gray-500/20 rounded text-[10px] font-mono text-gray-400 uppercase tracking-wider">
+                    Offline
+                </span>
+            </div>
+        </header>
+
+        <!-- Stream Feed (Chat Style) -->
+        <div id="feed-container" class="flex-1 overflow-y-auto p-6 scroll-smooth space-y-4 pb-24">
+            <!-- Initial State -->
+            <div class="h-full flex flex-col items-center justify-center opacity-30 select-none">
+                <i data-lucide="search" class="w-16 h-16 mb-4"></i>
+                <p class="font-mono text-sm">Busque um ID de canal para começar</p>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-gray-900 via-gray-900 to-transparent pointer-events-none">
+            <div class="glass-panel rounded-xl shadow-2xl border border-gray-700 pointer-events-auto flex items-center p-1.5 gap-2 max-w-4xl mx-auto">
+                <div class="pl-3 pr-2 text-gray-500">
+                    <i data-lucide="database" class="w-5 h-5"></i>
+                </div>
+                <input type="text" id="cmd-input" 
+                    class="flex-1 bg-transparent border-none focus:ring-0 text-sm font-mono text-white placeholder-gray-600 h-10"
+                    placeholder="Comando SQL (Simulado) ou Payload..."
+                    autocomplete="off">
+                <div class="flex items-center gap-2 pr-2">
+                    <button onclick="app.simulateSend()" class="p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg shadow-blue-900/20">
+                        <i data-lucide="send-horizontal" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        lucide.createIcons();
+
+        const app = {
+            eventSource: null,
+            demoInterval: null,
+            currentChannel: null,
+            msgCount: 0,
+            autoScroll: true,
+            
+            // DOM Elements
+            feed: document.getElementById('feed-container'),
+            statusText: document.getElementById('status-text'),
+            statusDot: document.getElementById('status-dot'),
+            countDisplay: document.getElementById('stat-count'),
+            latencyDisplay: document.getElementById('latency-stat'),
+            headerTitle: document.getElementById('header-title'),
+            listeningBadge: document.getElementById('listening-badge'),
+            input: document.getElementById('cmd-input'),
+            searchInput: document.getElementById('channel-search-input'),
+            searchError: document.getElementById('search-error'),
+            activeCard: document.getElementById('active-channel-card'),
+
+            init() {
+                this.input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') this.simulateSend();
+                });
+                
+                window.addEventListener('beforeunload', () => {
+                    this.stopAll();
+                });
+            },
+
+            stopAll() {
+                if (this.eventSource) {
+                    this.eventSource.close();
+                    this.eventSource = null;
+                }
+                if (this.demoInterval) {
+                    clearInterval(this.demoInterval);
+                    this.demoInterval = null;
+                }
+            },
+
+            handleSearch(e) {
+                e.preventDefault();
+                const val = this.searchInput.value.trim();
+                
+                // Validação simples: Deve ser numérico e > 0
+                // Aqui simulamos a lógica de "canal não existe" se for vazio ou 0
+                if (!val || isNaN(val) || parseInt(val) <= 0) {
+                    this.searchError.classList.remove('hidden');
+                    return;
+                }
+
+                this.searchError.classList.add('hidden');
+                this.connect(val);
+            },
+
+            connect(channelId) {
+                if (this.currentChannel === channelId && (this.eventSource?.readyState === 1 || this.demoInterval)) return;
+
+                this.stopAll();
+
+                // Atualizar UI
+                this.currentChannel = channelId;
+                this.updateChannelUI(channelId);
+                this.setStatus('connecting');
+                
+                if(this.msgCount === 0) {
+                    this.feed.innerHTML = '';
+                    this.addSystemMessage(`Inicializando listener no canal_${channelId}...`);
+                } else {
+                    this.addSystemMessage(`Mudando conexão para canal_${channelId}...`);
+                }
+
+                // Check Environment
+                const isPreview = window.location.protocol === 'blob:' || window.location.hostname.includes('googleusercontent');
+
+                if (isPreview) {
+                    setTimeout(() => {
+                        this.startDemoMode(channelId);
+                    }, 800);
+                    return;
+                }
+
+                try {
+                    this.eventSource = new EventSource(`/message/${channelId}`);
+
+                    this.eventSource.onopen = () => {
+                        this.setStatus('connected');
+                        this.addSystemMessage('Conectado ao backend Flask.');
+                    };
+
+                    this.eventSource.onmessage = (event) => {
+                        this.handleMessage(event.data);
+                    };
+
+                    this.eventSource.onerror = (err) => {
+                        console.warn("Backend não detectado. Mudando para modo Demo.");
+                        this.eventSource.close();
+                        this.startDemoMode(channelId);
+                    };
+
+                } catch (e) {
+                    console.error("Setup Error:", e);
+                    this.startDemoMode(channelId);
+                }
+            },
+
+            // Modo de Simulação com o JSON formatado que você pediu
+            startDemoMode(channelId) {
+                this.setStatus('connected-demo');
+                this.addSystemMessage(`Backend off. Simulando dados para canal ${channelId}.`, 'warn');
+                
+                const names = ["Afonso", "Maria", "System", "Bot_Log", "Carlos"];
+                const msgs = ["Eai", "Atualização completa", "Erro na transação", "Ping", "Novo usuário registrado"];
+
+                this.demoInterval = setInterval(() => {
+                    const randomName = names[Math.floor(Math.random() * names.length)];
+                    const randomMsg = msgs[Math.floor(Math.random() * msgs.length)];
+                    
+                    // O JSON exato que você pediu
+                    const payload = JSON.stringify({
+                        id: Math.floor(Math.random() * 1000),
+                        channel: parseInt(channelId),
+                        source: randomName,
+                        content: randomMsg
+                    });
+
+                    this.handleMessage(payload);
+                    this.latencyDisplay.innerText = Math.floor(Math.random() * 40 + 10) + "ms";
+
+                }, 4000);
+            },
+
+            handleMessage(data) {
+                this.msgCount++;
+                this.countDisplay.innerText = this.msgCount;
+                
+                const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+                let contentHtml = '';
+                let isCustomJson = false;
+                let sourceName = 'Postgres Node';
+
+                try {
+                    const jsonObj = JSON.parse(data);
+                    
+                    // Verifica se segue o padrão Source/Content solicitado
+                    if (jsonObj.source && jsonObj.content) {
+                        isCustomJson = true;
+                        sourceName = jsonObj.source;
+                        // Design de Chat
+                        contentHtml = `<p class="text-gray-200 text-sm leading-relaxed">${jsonObj.content}</p>`;
+                        if(jsonObj.id) contentHtml += `<span class="text-[10px] text-gray-600 font-mono mt-1 block">Ref ID: ${jsonObj.id}</span>`;
+                    } else {
+                        // JSON genérico (pretty print)
+                        contentHtml = `<pre class="text-xs font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap bg-black/30 p-2 rounded">${JSON.stringify(jsonObj, null, 2)}</pre>`;
+                    }
+                } catch (e) {
+                    // Texto plano
+                    contentHtml = `<p class="text-gray-300 font-mono text-sm break-words">${data}</p>`;
+                }
+
+                const item = document.createElement('div');
+                item.className = "message-enter flex gap-4 p-4 rounded-xl bg-gray-800/40 border border-gray-700/50 hover:border-gray-600 transition-colors";
+                
+                // Avatar baseado no Source
+                const initial = sourceName.charAt(0).toUpperCase();
+                const colorClass = isCustomJson ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+                
+                item.innerHTML = `
+                    <div class="flex-shrink-0">
+                        <div class="w-10 h-10 rounded-full ${colorClass} border flex items-center justify-center font-bold shadow-sm">
+                            ${initial}
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-sm font-bold text-gray-200">${sourceName}</span>
+                            <span class="text-[10px] text-gray-500 font-mono">${time}</span>
+                        </div>
+                        ${contentHtml}
+                    </div>
+                `;
+
+                this.feed.appendChild(item);
+                lucide.createIcons();
+
+                if (this.autoScroll) {
+                    this.feed.scrollTop = this.feed.scrollHeight;
+                }
+            },
+
+            addSystemMessage(text, type = 'info') {
+                const colors = {
+                    'error': 'text-red-400',
+                    'warn': 'text-amber-400',
+                    'info': 'text-gray-500'
+                };
+                const color = colors[type] || colors.info;
+                const div = document.createElement('div');
+                div.className = `flex justify-center my-4`;
+                div.innerHTML = `<span class="px-3 py-1 rounded-full bg-gray-800/50 border border-gray-700 text-[10px] font-mono ${color} tracking-wide">${text}</span>`;
+                this.feed.appendChild(div);
+                if (this.autoScroll) this.feed.scrollTop = this.feed.scrollHeight;
+            },
+
+            simulateSend() {
+                const val = this.input.value.trim();
+                if (!val) return;
+                
+                // Simula envio visualmente
+                this.input.value = '';
+                this.addSystemMessage("Comando enviado (Simulação)", "info");
+            },
+
+            setStatus(state) {
+                const colors = {
+                    'disconnected': 'bg-gray-500',
+                    'connecting': 'bg-yellow-500',
+                    'connected': 'bg-emerald-500',
+                    'connected-demo': 'bg-purple-500',
+                    'error': 'bg-red-500'
+                };
+                
+                this.statusDot.className = `w-2.5 h-2.5 rounded-full shadow-lg transition-colors duration-300 ${colors[state] || colors.disconnected}`;
+                
+                if (state.startsWith('connected')) {
+                    this.statusDot.classList.add('live-indicator');
+                    const isDemo = state === 'connected-demo';
+                    this.statusDot.style.color = isDemo ? '#a855f7' : '#10b981';
+                    
+                    this.statusText.innerText = isDemo ? "SIMULAÇÃO" : "ONLINE";
+                    this.statusText.className = isDemo ? "text-xs font-bold text-purple-400 tracking-wide" : "text-xs font-bold text-emerald-400 tracking-wide";
+                    
+                    this.listeningBadge.innerText = "Listening";
+                    this.listeningBadge.className = "px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-[10px] font-mono text-blue-400 uppercase tracking-wider";
+                } else if (state === 'connecting') {
+                    this.statusDot.classList.remove('live-indicator');
+                    this.statusText.innerText = "CONECTANDO...";
+                    this.statusText.className = "text-xs font-medium text-yellow-500";
+                } else {
+                    this.statusDot.classList.remove('live-indicator');
+                    this.statusText.innerText = "OFFLINE";
+                    this.statusText.className = "text-xs font-medium text-red-400";
+                }
+            },
+
+            updateChannelUI(id) {
+                // Atualiza Header
+                this.headerTitle.innerHTML = `<span class="text-blue-500">#</span> Canal ${id}`;
+                
+                // Atualiza Card Lateral
+                this.activeCard.classList.remove('hidden');
+                this.activeCard.classList.remove('animate-pulse'); // Remove pulso inicial
+                document.getElementById('card-channel-id').innerText = id;
+                document.getElementById('card-channel-id-sm').innerText = id;
+            },
+
+            toggleScroll() {
+                this.autoScroll = !this.autoScroll;
+                const btn = document.getElementById('scroll-btn');
+                btn.className = this.autoScroll 
+                    ? "p-1.5 bg-blue-500/20 text-blue-400 rounded transition-colors" 
+                    : "p-1.5 hover:bg-gray-700 rounded text-gray-500 transition-colors";
+            }
+        };
+
+        app.init();
+
+    </script>
+</body>
+</html>
